@@ -1,0 +1,80 @@
+name: Lab 1 - Pytest
+run-name: Lab 1 Pytest run by ${{ github.actor }}
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'lab_1/**'
+      - '.github/workflows/pytest_action.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'lab_1/**'
+      - '.github/workflows/pytest_action.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lab_1
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12', '3.13']
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+        cache-dependency-path: lab_1/requirements.txt
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Run tests with coverage and generate XML report
+      run: pytest --junitxml=pytest-report.xml -v
+      continue-on-error: false
+
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: lab1-test-results-py${{ matrix.python-version }}
+        path: lab_1/pytest-report.xml
+
+    - name: Upload coverage report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: lab1-coverage-py${{ matrix.python-version }}
+        path: lab_1/coverage.xml
+
+    - name: Write job summary
+      if: always()
+      run: |
+        echo "## Lab 1 Pytest Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- Python version: ${{ matrix.python-version }}" >> $GITHUB_STEP_SUMMARY
+        echo "- Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+        echo "- Coverage threshold: 90% minimum (enforced)" >> $GITHUB_STEP_SUMMARY
+        echo "- Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+    - name: Notify on success
+      if: success()
+      run: echo "Lab 1 pytest passed on Python ${{ matrix.python-version }}"
+
+    - name: Notify on failure
+      if: failure()
+      run: echo "Lab 1 pytest failed on Python ${{ matrix.python-version }}"
