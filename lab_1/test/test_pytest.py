@@ -137,3 +137,5 @@ def test_chained_operations():
     b = calculator.fun2(2, 3)   # -1
     c = calculator.fun3(2, 3)   # 6
     assert calculator.fun4(a, b, c) == 10
+
+
