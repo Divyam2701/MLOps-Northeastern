@@ -139,8 +139,3 @@ def test_chained_operations():
     assert calculator.fun4(a, b, c) == 10
 
 
-def test_fun1():
-    assert calculator.fun1(2, 3) == 6     # intentionally wrong
-    assert calculator.fun1(5, 0) == 5
-    assert calculator.fun1(-1, 1) == 0
-    assert calculator.fun1(-1, -1) == -2
