@@ -32,6 +32,13 @@ A calculator module with input validation, tested with both `pytest` and
 - Added path filters so workflows only run when `lab_1/` changes
 - Upgraded to `checkout@v4`, `setup-python@v5`, `upload-artifact@v4`
 
+**Branch protection**
+- `main` is protected; changes must go through a pull request
+- All four status checks (pytest on Python 3.11, 3.12, 3.13, and the unittest
+  job) are required before merging
+- Verified in PR #1: a deliberately failing test blocked the merge, and the
+  merge unblocked once the test was fixed
+
 ## Running locally
 
 ```bash
