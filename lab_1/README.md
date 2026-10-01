@@ -39,6 +39,14 @@ A calculator module with input validation, tested with both `pytest` and
 - Verified in PR #1: a deliberately failing test blocked the merge, and the
   merge unblocked once the test was fixed
 
+Merge blocked while tests were failing:
+
+![Merge blocked by failing checks](./screenshot/Screenshot%20From%202026-10-01%2017-21-08.png)
+
+Merge permitted once the tests passed:
+
+![All checks passed](./screenshot/Screenshot%20From%202026-10-01%2017-25-44.png)
+
 ## Running locally
 
 ```bash
