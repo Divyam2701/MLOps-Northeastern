@@ -1,40 +1,61 @@
-services:
-  # Service 1: Train the model
-  model-training:
-    image: python:3.10-slim
-    container_name: ml_trainer
-    working_dir: /app
-    volumes:
-      - ./src:/app/src
-      - ./requirements.txt:/app/requirements.txt
-      - model_exchange:/exchange   # Shared volume mount
-    # Run training -> Copy result to shared folder
-    command: >
-      sh -c "pip install -r requirements.txt &&
-             python src/model_training.py &&
-             cp my_model.keras /exchange/my_model.keras"
+name: lab2-iris
 
-  # Service 2: Serve the model
-  serving:
-    image: python:3.10-slim
-    container_name: ml_serving
-    working_dir: /app
-    ports:
-      - "80:80"
+services:
+  # Service 1: Train the model and write it to the shared volume
+  model-training:
+    build:
+      context: .
+      dockerfile: dockerfile
+      target: model_training      # reuse the training stage of the multi-stage Dockerfile
+    image: lab2-iris-trainer:latest
+    container_name: ml_trainer
+    environment:
+      MODEL_DIR: /models
     volumes:
-      - ./src:/app/src
-      - ./requirements.txt:/app/requirements.txt
-      - ./src/templates:/app/templates
-      - ./src/statics:/app/statics
-      - model_exchange:/exchange   # Shared volume mount
+      - model_exchange:/models    # Shared volume mount
+    networks:
+      - ml_net
+
+  # Service 2: Serve the model from the shared volume
+  serving:
+    build:
+      context: .
+      dockerfile: dockerfile
+      target: serving
+      args:
+        PORT: ${PORT:-4000}
+    image: lab2-iris-serving:latest
+    container_name: ml_serving
+    ports:
+      - "${PORT:-4000}:${PORT:-4000}"
+    environment:
+      PORT: ${PORT:-4000}
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
+      MODEL_PATH: /models/my_model.keras    # model freshly trained by model-training
+      SCALER_PATH: /models/scaler.pkl
+    volumes:
+      - model_exchange:/models:ro           # read-only: serving never modifies the model
     depends_on:
       model-training:
         condition: service_completed_successfully
-    # Copy result FROM shared folder -> Run server
-    command: >
-      sh -c "pip install --trusted-host pypi.python.org -r requirements.txt &&
-             cp /exchange/my_model.keras ./my_model.keras &&
-             python src/main.py"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:${PORT:-4000}/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1g
+    networks:
+      - ml_net
 
 volumes:
   model_exchange:
+
+networks:
+  ml_net:
+    driver: bridge

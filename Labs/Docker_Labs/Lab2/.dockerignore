@@ -1,0 +1,14 @@
+# Keep the build context small and avoid baking local artifacts into the image
+**/__pycache__
+**/*.pyc
+*.keras
+*.pkl
+*.tar
+.env
+.git
+.venv
+venv
+README.md
+HOWTO
+docker-compose.yml
+screenshots

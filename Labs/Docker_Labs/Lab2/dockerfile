@@ -1,30 +1,62 @@
-# Stage 1: Build and Train the Model
-FROM python:3.10 AS model_training
+# syntax=docker/dockerfile:1
+
+# Stage 0: Shared base with Python dependencies
+# slim image + --no-cache-dir keeps the image small; requirements are copied
+# before the source code so this layer is cached across code changes.
+FROM python:3.10-slim AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    TF_CPP_MIN_LOG_LEVEL=2
 
 WORKDIR /app
 
-COPY src/model_training.py /app/
-COPY requirements.txt /app/
-
+COPY requirements.txt .
 RUN pip install -r requirements.txt
+
+# Run as a non-root user; /models is owned by it so a mounted volume is writable
+RUN useradd --create-home --uid 1000 appuser \
+    && mkdir -p /models \
+    && chown appuser:appuser /app /models
+USER appuser
+
+
+# Stage 1: Build and Train the Model
+FROM base AS model_training
+
+ENV MODEL_DIR=/app
+
+COPY --chown=appuser:appuser src/model_training.py .
+
+CMD ["python", "model_training.py"]
+
+# Train at build time so the serving stage can copy the artifacts
 RUN python model_training.py
 
 
 # Stage 2: Serve Predictions
-FROM python:3.10 AS serving
+FROM base AS serving
 
-WORKDIR /app
+LABEL org.opencontainers.image.title="lab2-iris-serving" \
+      org.opencontainers.image.description="Flask + Gunicorn server for the Iris TensorFlow model"
 
-COPY --from=model_training /app/my_model.keras /app/
-COPY src/main.py /app/
-COPY requirements.txt /app/
+ARG PORT=4000
+ENV PORT=${PORT} \
+    MODEL_PATH=/app/my_model.keras \
+    SCALER_PATH=/app/scaler.pkl \
+    GUNICORN_WORKERS=1
 
-RUN pip install --trusted-host pypi.python.org -r requirements.txt
+COPY --from=model_training /app/my_model.keras /app/scaler.pkl /app/
+COPY --chown=appuser:appuser src/main.py .
+COPY --chown=appuser:appuser src/templates ./templates
+COPY --chown=appuser:appuser src/statics ./statics
 
-COPY src/templates /app/templates
-COPY src/statics /app/statics
+EXPOSE ${PORT}
 
-EXPOSE 80
-# Docker "exposes" port 80 because it is the standard, well-known port for the HTTP (web) protocol
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD python -c "import os, urllib.request; urllib.request.urlopen(f'http://localhost:{os.environ[\"PORT\"]}/health', timeout=4)" || exit 1
 
-CMD ["python", "main.py"]
+# Gunicorn is a production WSGI server (Flask's built-in server is dev-only)
+CMD ["sh", "-c", "exec gunicorn --bind 0.0.0.0:${PORT} --workers ${GUNICORN_WORKERS} --timeout 120 main:app"]

@@ -1,3 +1,5 @@
+import os
+import joblib
 import tensorflow as tf
 from sklearn import datasets
 from sklearn.model_selection import train_test_split
@@ -27,5 +29,10 @@ if __name__ == '__main__':
 
     model.fit(X_train, y_train, epochs=50, validation_data=(X_test, y_test))
 
-    model.save('my_model.keras')
-    print("Model was trained and saved")
+    # Output location is configurable so Docker Compose can write to a shared volume
+    model_dir = os.environ.get('MODEL_DIR', '.')
+    os.makedirs(model_dir, exist_ok=True)
+    model.save(os.path.join(model_dir, 'my_model.keras'))
+    # Save the scaler too, so the server applies the same preprocessing
+    joblib.dump(sc, os.path.join(model_dir, 'scaler.pkl'))
+    print(f"Model and scaler were trained and saved to {model_dir}")
