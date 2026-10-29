@@ -1,80 +1,153 @@
-import pandas as pd
+"""ML functions used by the Airflow_Lab3 DAG.
+
+Tasks exchange small JSON-serializable values (file paths and metric dicts)
+through XCom instead of pickled DataFrames, which Airflow 3 no longer allows.
+Large artifacts (data splits, models) are written to a per-run directory.
+"""
+import json
 import os
-import pickle
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
-from sklearn.compose import make_column_transformer
-from sklearn.model_selection import train_test_split
-from sklearn.model_selection import GridSearchCV
+import re
+import shutil
+from datetime import datetime, timezone
+from pathlib import Path
+
+import joblib
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 
-# Load data from a CSV file
-def load_data():
-    """
-    Loads data from a CSV file, serializes it, and returns the serialized data.
+# Lab_3/ – everything is resolved relative to the repo, not a hard-coded VM path
+LAB_DIR = Path(__file__).resolve().parents[2]
+DATA_PATH = Path(os.environ.get("LAB3_DATA_PATH", LAB_DIR / "dags" / "data" / "advertising.csv"))
+OUTPUT_DIR = Path(os.environ.get("LAB3_OUTPUT_DIR", LAB_DIR / "output"))
+PRODUCTION_DIR = OUTPUT_DIR / "production"
 
-    Returns:
-        bytes: Serialized data.
-    """
-    data = pd.read_csv("/home/mlops_fall_2024/advertising.csv")
-    return data
+TARGET = "Clicked on Ad"
+FEATURES = ["Daily Time Spent on Site", "Age", "Area Income", "Daily Internet Usage", "Male"]
+MIN_ROWS = 100
 
-# Preprocess the data
-def data_preprocessing(data):
-    X = data.drop(['Timestamp', 'Clicked on Ad', 'Ad Topic Line', 'Country', 'City'], axis=1)
-    y = data['Clicked on Ad']
+# Candidate models trained in parallel by dynamic task mapping
+MODELS = {
+    "logistic_regression": lambda: LogisticRegression(max_iter=1000),
+    "random_forest": lambda: RandomForestClassifier(n_estimators=200, random_state=42),
+    "gradient_boosting": lambda: GradientBoostingClassifier(random_state=42),
+}
 
-    # Split the data into training and testing sets
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
 
-    num_columns = ['Daily Time Spent on Site', 'Age', 'Area Income', 'Daily Internet Usage', 'Male']
+def run_dir(run_id: str) -> Path:
+    """Directory for one DAG run's artifacts (run ids contain ':' and '+')."""
+    path = OUTPUT_DIR / "runs" / re.sub(r"[^A-Za-z0-9_.-]", "_", run_id)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
-    # Define a column transformer for preprocessing
-    ct = make_column_transformer(
-        (MinMaxScaler(), num_columns),
-        (StandardScaler(), num_columns),
-        remainder='passthrough'
+
+def validate_data(path: Path = DATA_PATH) -> dict:
+    """Check the dataset before training; raises ValueError on bad data."""
+    data = pd.read_csv(path)
+
+    missing = [c for c in FEATURES + [TARGET] if c not in data.columns]
+    if missing:
+        raise ValueError(f"Missing columns: {missing}")
+    if len(data) < MIN_ROWS:
+        raise ValueError(f"Only {len(data)} rows, need at least {MIN_ROWS}")
+    nulls = data[FEATURES + [TARGET]].isnull().sum()
+    if nulls.any():
+        raise ValueError(f"Null values found: {nulls[nulls > 0].to_dict()}")
+    if set(data[TARGET].unique()) - {0, 1}:
+        raise ValueError(f"'{TARGET}' must be binary (0/1)")
+
+    return {
+        "rows": int(len(data)),
+        "features": FEATURES,
+        "positive_rate": round(float(data[TARGET].mean()), 3),
+    }
+
+
+def preprocess(work_dir: str, test_size: float = 0.3, path: Path = DATA_PATH) -> str:
+    """Split and scale the data; save the splits and the fitted scaler."""
+    data = pd.read_csv(path)
+    X, y = data[FEATURES], data[TARGET]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=42, stratify=y
     )
 
-    # Transform the training and testing data
-    X_train = ct.fit_transform(X_train)
-    X_test = ct.transform(X_test)
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_test = scaler.transform(X_test)
 
-    return X_train, X_test, y_train.values, y_test.values
-
-# Build and save a logistic regression model
-def build_model(data, filename):
-    X_train, X_test, y_train, y_test = data
-
-    # Create and train a logistic regression model with the best parameters
-    lr_clf = LogisticRegression()
-    lr_clf.fit(X_train, y_train)
-
-    # Ensure the directory exists
-    output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "model")
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-    
-    output_path = os.path.join(output_dir, filename)
-    
-    # Save the trained model to a file
-    pickle.dump(lr_clf, open(output_path, 'wb'))
+    work_dir = Path(work_dir)
+    np.savez(work_dir / "split.npz", X_train=X_train, X_test=X_test,
+             y_train=y_train.values, y_test=y_test.values)
+    joblib.dump(scaler, work_dir / "scaler.joblib")
+    return str(work_dir)
 
 
-# Load a saved logistic regression model and evaluate it
-def load_model(data, filename):
-    X_train, X_test, y_train, y_test = data
-    output_path = os.path.join(os.path.dirname(__file__), "../model", filename)
-    # Load the saved model from a file
-    loaded_model = pickle.load(open(output_path, 'rb'))
+def train_model(model_name: str, work_dir: str) -> dict:
+    """Train one candidate model, evaluate it on the test set and save it."""
+    work_dir = Path(work_dir)
+    split = np.load(work_dir / "split.npz")
 
-    # Make predictions on the test data and print the model's score
-    predictions = loaded_model.predict(X_test)
-    print(f"Model score on test data: {loaded_model.score(X_test, y_test)}")
+    model = MODELS[model_name]()
+    model.fit(split["X_train"], split["y_train"])
+    predictions = model.predict(split["X_test"])
+    y_test = split["y_test"]
 
-    return predictions[0]
+    (work_dir / "models").mkdir(exist_ok=True)
+    model_path = work_dir / "models" / f"{model_name}.joblib"
+    joblib.dump(model, model_path)
+
+    return {
+        "model": model_name,
+        "accuracy": round(float(accuracy_score(y_test, predictions)), 4),
+        "f1": round(float(f1_score(y_test, predictions)), 4),
+        "precision": round(float(precision_score(y_test, predictions)), 4),
+        "recall": round(float(recall_score(y_test, predictions)), 4),
+        "model_path": str(model_path),
+    }
 
 
-if __name__ == '__main__':
-    x = load_data()
-    x = data_preprocessing(x)
-    build_model(x, 'model.sav')
+def select_best(results: list[dict], work_dir: str) -> dict:
+    """Pick the most accurate model (F1 breaks ties) and write metrics.json."""
+    results = sorted(results, key=lambda r: (r["accuracy"], r["f1"]), reverse=True)
+    best = results[0]
+
+    report = {
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "best_model": best["model"],
+        "results": results,
+    }
+    (Path(work_dir) / "metrics.json").write_text(json.dumps(report, indent=2))
+    return best
+
+
+def promote_model(best: dict, work_dir: str, threshold: float) -> str:
+    """Copy the winning model + scaler to the production folder with a model card."""
+    PRODUCTION_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copy(best["model_path"], PRODUCTION_DIR / "model.joblib")
+    shutil.copy(Path(work_dir) / "scaler.joblib", PRODUCTION_DIR / "scaler.joblib")
+
+    card = {
+        "model": best["model"],
+        "metrics": {k: best[k] for k in ("accuracy", "f1", "precision", "recall")},
+        "accuracy_threshold": threshold,
+        "features": FEATURES,
+        "source_run": str(work_dir),
+        "promoted_at": datetime.now(timezone.utc).isoformat(),
+    }
+    (PRODUCTION_DIR / "model_card.json").write_text(json.dumps(card, indent=2))
+    return str(PRODUCTION_DIR)
+
+
+if __name__ == "__main__":
+    # Run the whole pipeline without Airflow for quick debugging
+    print(validate_data())
+    work = str(run_dir("local_debug"))
+    preprocess(work)
+    scores = [train_model(name, work) for name in MODELS]
+    best = select_best(scores, work)
+    print(json.dumps(best, indent=2))

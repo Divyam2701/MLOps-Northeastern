@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<body style="font-family: Arial, sans-serif; color: #1f2937;">
+  <h2 style="color: {{ '#15803d' if promoted else '#b45309' }};">
+    {{ 'Model promoted to production' if promoted else 'Model NOT promoted: accuracy below threshold' }}
+  </h2>
+  <p>
+    DAG <b>{{ dag_id }}</b>, run <code>{{ run_id }}</code><br>
+    Best model: <b>{{ best.model }}</b> with accuracy <b>{{ best.accuracy }}</b>
+    (threshold {{ threshold }})
+  </p>
+  <table cellpadding="6" style="border-collapse: collapse; border: 1px solid #d1d5db;">
+    <tr style="background: #f3f4f6;">
+      <th align="left">Model</th><th>Accuracy</th><th>F1</th><th>Precision</th><th>Recall</th>
+    </tr>
+    {% for r in results %}
+    <tr style="{{ 'font-weight: bold;' if r.model == best.model else '' }}">
+      <td>{{ r.model }}</td><td>{{ r.accuracy }}</td><td>{{ r.f1 }}</td>
+      <td>{{ r.precision }}</td><td>{{ r.recall }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% if promoted %}<p>Production model saved to <code>{{ production_dir }}</code>.</p>{% endif %}
+</body>
+</html>

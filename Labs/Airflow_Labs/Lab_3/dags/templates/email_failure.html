@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html lang="en">
+<body style="font-family: Arial, sans-serif; color: #1f2937;">
+  <h2 style="color: #b91c1c;">Task failed</h2>
+  <p>
+    DAG <b>{{ dag_id }}</b>, task <b>{{ task_id }}</b><br>
+    Run <code>{{ run_id }}</code>, attempt {{ try_number }}
+  </p>
+  <pre style="background: #f3f4f6; padding: 10px;">{{ exception }}</pre>
+</body>
+</html>

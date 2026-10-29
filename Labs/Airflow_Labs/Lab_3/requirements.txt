@@ -1,5 +1,10 @@
-apache-airflow
+# Installed together with apache-airflow using the official constraints file,
+# which pins every version below (see scripts/setup_vm.sh).
+apache-airflow-providers-smtp
+apache-airflow-providers-standard
 scikit-learn
-scipy
 pandas
 numpy
+joblib
+jinja2
+pytest
